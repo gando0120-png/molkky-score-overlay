@@ -18,5 +18,24 @@
     }
   }
 
-  window.SMAScoreMatchConfig = { STORAGE_KEY, save, load };
+  function formatToLabel(format) {
+    if (!format) return "";
+
+    const labels = {
+      "win-2": "2勝先取",
+      "win-3": "3勝先取",
+      "win-4": "4勝先取",
+      "win-5": "5勝先取",
+      "game-2": "2ゲーム合計",
+      "game-3": "3ゲーム合計",
+      "game-4": "4ゲーム合計",
+      "total-2": "2ゲーム合計",
+      "total-3": "3ゲーム合計",
+      "total-4": "4ゲーム合計",
+    };
+
+    return labels[format] ?? "";
+  }
+
+  window.SMAScoreMatchConfig = { STORAGE_KEY, save, load, formatToLabel };
 })();

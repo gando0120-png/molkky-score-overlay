@@ -23,7 +23,13 @@
 
         <div class="header__meta">
           <p class="header__tournament" id="tournamentName"></p>
-          <p class="header__match" id="matchName"></p>
+          <div class="header__match-row">
+            <span class="header__match" id="matchName"></span>
+            <span class="header__format-wrap" id="formatWrap" hidden>
+              <span class="header__format-sep" aria-hidden="true">｜</span>
+              <span class="header__format" id="formatLabel"></span>
+            </span>
+          </div>
           <div class="header__set">
             <span class="header__set-label">SET</span>
             <span class="header__set-score">
@@ -68,9 +74,15 @@
         </div>
       </section>
 
+      <section class="history-panel" id="historyPanel" hidden aria-label="入力履歴">
+        <h2 class="history-panel__title">入力履歴</h2>
+        <div class="history-list" id="historyList"></div>
+      </section>
+
     </div>
 
     <footer class="actions" aria-label="操作">
+      <button class="action action--edit" type="button" id="editModeBtn">修正モード</button>
       <button class="action action--back" type="button" id="backBtn" disabled>戻る</button>
       <button class="action action--confirm" type="button" id="confirmBtn" disabled>決定</button>
       <button class="action action--confirm action--next-set" type="button" id="nextSetBtn" hidden>次セットへ</button>
