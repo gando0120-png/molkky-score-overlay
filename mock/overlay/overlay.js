@@ -23,6 +23,40 @@
     scoreAnimation: true,
   };
 
+  /** localStorage キー: smascore-game-state（試合同期）, smascore-overlay-settings（Overlay表示） */
+  function createInitialState() {
+    return {
+      tournament: "",
+      match: "",
+      teamCount: 2,
+      teams: [
+        {
+          name: "チーム1",
+          score: 0,
+          total: 0,
+          misses: 0,
+          won: false,
+          disqualified: false,
+          setWins: 0,
+        },
+        {
+          name: "チーム2",
+          score: 0,
+          total: 0,
+          misses: 0,
+          won: false,
+          disqualified: false,
+          setWins: 0,
+        },
+      ],
+      activeTeamIndex: 0,
+      setEnded: false,
+      setWinnerIndex: null,
+      pendingSelection: null,
+      overlaySettings: currentOverlaySettings,
+    };
+  }
+
   function parseDemoParam(value) {
     const n = Number(value);
     if (n >= 2 && n <= 4) return n;
@@ -339,16 +373,15 @@
       renderOverlay(createDemoState(demoTeamCount));
       return;
     }
-    if (state) renderOverlay(state);
+    renderOverlay(state || createInitialState());
   }
 
   applyVisualSettings(currentOverlaySettings);
 
   if (window.SMAScoreSync) {
     SMAScoreSync.subscribe(applyState);
-    const initial = SMAScoreSync.read();
-    if (initial || demoTeamCount !== null) applyState(initial);
-  } else if (demoTeamCount !== null) {
+    applyState(SMAScoreSync.read());
+  } else {
     applyState(null);
   }
 })();
