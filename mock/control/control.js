@@ -1,7 +1,6 @@
 /**
- * SMAScore Control — 失格・セット終了・修正モード・履歴再計算
+ * SMAScore Control — 失格・セット/試合終了・修正モード・Firebase同期
  */
-
 (function () {
   const inputDisplay = document.getElementById("inputDisplay");
   const inputDisplayLabel = document.querySelector(".input-display__label");
@@ -36,6 +35,9 @@
   const settingsShowTournamentInput = document.getElementById("settingsShowTournament");
   const settingsShowMatchInput = document.getElementById("settingsShowMatch");
   const settingsScoreAnimationInput = document.getElementById("settingsScoreAnimation");
+  const throwOrderPanel = document.getElementById("throwOrderPanel");
+  const swapOrderBtn = document.getElementById("swapOrderBtn");
+  const throwOrderTeamsEl = document.getElementById("throwOrderTeams");
 
   const matchConfig = window.SMAScoreMatchConfig?.load();
   if (!matchConfig) {
@@ -65,6 +67,8 @@
   let pendingSelection = null;
   let setEnded = false;
   let setWinnerIndex = null;
+  let matchEnded = false;
+  let matchWinnerIndex = null;
   const history = [];
   const throwLog = [];
 
@@ -72,6 +76,9 @@
   let selectedEditIndex = null;
   let pendingEditSelection = null;
   let settingsOpen = false;
+  let isApplyingRemote = false;
+  let suppressPublish = true;
+  let localRevision = 0;
 
   let overlaySettings = window.SMAScoreOverlaySettings?.load() ?? {
     showTournament: true,
@@ -79,6 +86,17 @@
     backgroundOpacity: "standard",
     scoreAnimation: true,
   };
+
+  function isOrderEntry(entry) {
+    return entry?.kind === "order";
+  }
+
+  function normalizeSelection(selection) {
+    if (selection === "miss" || selection === null || selection === undefined) {
+      return 0;
+    }
+    return selection;
+  }
 
   function cloneTeams() {
     return teams.map((team) => ({ ...team }));
@@ -95,6 +113,8 @@
       setStartTeamIndex,
       setEnded,
       setWinnerIndex,
+      matchEnded,
+      matchWinnerIndex,
       throwLog: cloneThrowLog(),
     };
   }
@@ -106,6 +126,8 @@
     setStartTeamIndex = state.setStartTeamIndex;
     setEnded = state.setEnded;
     setWinnerIndex = state.setWinnerIndex;
+    matchEnded = !!state.matchEnded;
+    matchWinnerIndex = state.matchWinnerIndex ?? null;
     throwLog.length = 0;
     state.throwLog.forEach((entry) => throwLog.push({ ...entry }));
   }
@@ -137,14 +159,16 @@
   }
 
   function applySelection(team, selection) {
-    if (selection >= 1 && selection <= 12) {
-      team.score = applyFiftyRule(team.score + selection);
+    const value = normalizeSelection(selection);
+
+    if (value >= 1 && value <= 12) {
+      team.score = applyFiftyRule(team.score + value);
       team.misses = 0;
       team.won = team.score === 50;
       return;
     }
 
-    if (selection === 0) {
+    if (value === 0) {
       team.misses = Math.min(3, team.misses + 1);
       if (team.misses >= 3) {
         team.disqualified = true;
@@ -154,7 +178,7 @@
       return;
     }
 
-    if (selection === "F") {
+    if (value === "F") {
       if (team.score >= 37) {
         team.score = 25;
         team.won = false;
@@ -200,8 +224,28 @@
     resetSetScores();
   }
 
+  function finishMatch(winnerIndex) {
+    matchEnded = true;
+    matchWinnerIndex = winnerIndex;
+    setEnded = false;
+    setWinnerIndex = null;
+    pendingSelection = null;
+  }
+
   function applyNextSetTransition(winnerIndex) {
+    const matchResult = window.SMAScoreMatchRules?.evaluateMatchEnd(
+      teams,
+      winnerIndex,
+      META.format
+    ) ?? { ended: false, winnerIndex: null };
+
     teams[winnerIndex].setWins += 1;
+
+    if (matchResult.ended) {
+      finishMatch(matchResult.winnerIndex);
+      return;
+    }
+
     rotateSetStartTeam();
     beginSet();
   }
@@ -247,11 +291,22 @@
       team.setWins = 0;
     });
 
+    matchEnded = false;
+    matchWinnerIndex = null;
     setStartTeamIndex = 0;
     beginSet();
 
     for (let i = 0; i < log.length; i += 1) {
       const entry = log[i];
+
+      if (isOrderEntry(entry)) {
+        activeTeamIndex = entry.activeTeamIndex;
+        if (entry.setStartTeamIndex !== undefined && entry.setStartTeamIndex !== null) {
+          setStartTeamIndex = entry.setStartTeamIndex;
+        }
+        continue;
+      }
+
       activeTeamIndex = entry.teamIndex;
       const team = teams[entry.teamIndex];
 
@@ -267,8 +322,15 @@
 
         if (i < log.length - 1) {
           applyNextSetTransition(result.winnerIndex);
+          if (matchEnded) break;
         }
       }
+    }
+
+    if (!matchEnded && window.SMAScoreMatchRules) {
+      const recomputed = SMAScoreMatchRules.recomputeMatchEnd(teams, META.format);
+      matchEnded = recomputed.ended;
+      matchWinnerIndex = recomputed.winnerIndex;
     }
 
     throwLog.length = 0;
@@ -322,7 +384,22 @@
   }
 
   function formatSelection(selection) {
-    return selection === "F" ? "F" : String(selection);
+    if (selection === "F") return "F";
+    if (selection === 0 || selection === "miss") return "0";
+    return String(selection);
+  }
+
+  function formatHistoryEntry(entry) {
+    if (isOrderEntry(entry)) {
+      const name = teams[entry.activeTeamIndex]?.name ?? `チーム ${entry.activeTeamIndex + 1}`;
+      return { teamName: name, input: "順序", score: "→" };
+    }
+
+    return {
+      teamName: teams[entry.teamIndex]?.name ?? `チーム ${entry.teamIndex + 1}`,
+      input: formatSelection(entry.selection),
+      score: entry.scoreAfter ?? "-",
+    };
   }
 
   function renderMissDots(misses, disqualified) {
@@ -362,15 +439,16 @@
 
     teamBoardEl.innerHTML = teams
       .map((team, index) => {
-        const isActive = !editMode && !setEnded && index === activeTeamIndex;
-        const isWinner = setEnded && index === setWinnerIndex;
-        const victoryClass = team.won && !setEnded ? " team-card__score--victory" : "";
+        const isActive = !editMode && !setEnded && !matchEnded && index === activeTeamIndex;
+        const isSetWinner = setEnded && index === setWinnerIndex;
+        const isMatchWinner = matchEnded && index === matchWinnerIndex;
+        const victoryClass = team.won && !setEnded && !matchEnded ? " team-card__score--victory" : "";
         const dqBadge = team.disqualified
           ? '<span class="team-card__badge">失格</span>'
           : "<span></span>";
 
         return `
-          <article class="team-card team-card--color-${index}${isActive ? " team-card--active" : ""}${team.disqualified ? " team-card--disqualified" : ""}${isWinner ? " team-card--set-winner" : ""}" aria-label="${team.name}">
+          <article class="team-card team-card--color-${index}${isActive ? " team-card--active" : ""}${team.disqualified ? " team-card--disqualified" : ""}${isSetWinner ? " team-card--set-winner" : ""}${isMatchWinner ? " team-card--match-winner" : ""}" aria-label="${team.name}">
             <div class="team-card__meta">
               <p class="team-card__name">${team.name}</p>
               ${dqBadge}
@@ -389,6 +467,42 @@
       .join("");
   }
 
+  function renderThrowOrderPanel() {
+    if (!throwOrderPanel || !swapOrderBtn) return;
+
+    const blocked = matchEnded || setEnded || editMode || settingsOpen;
+    throwOrderPanel.hidden = blocked;
+
+    if (teams.length === 2) {
+      swapOrderBtn.hidden = false;
+      swapOrderBtn.textContent = "先攻・後攻を入れ替える";
+      if (throwOrderTeamsEl) throwOrderTeamsEl.hidden = true;
+      swapOrderBtn.disabled = blocked;
+      return;
+    }
+
+    swapOrderBtn.hidden = true;
+    if (!throwOrderTeamsEl) return;
+
+    throwOrderTeamsEl.hidden = blocked;
+    throwOrderTeamsEl.innerHTML = teams
+      .map((team, index) => {
+        const disabled = blocked || team.disqualified || index === activeTeamIndex;
+        return `
+          <button type="button" class="throw-order__team throw-order__team--color-${index}" data-team-index="${index}" ${disabled ? "disabled" : ""}>
+            ${team.name}
+          </button>
+        `;
+      })
+      .join("");
+
+    throwOrderTeamsEl.querySelectorAll(".throw-order__team").forEach((button) => {
+      button.addEventListener("click", () => {
+        changeThrowOrder(Number(button.dataset.teamIndex));
+      });
+    });
+  }
+
   function renderHistoryList() {
     if (!editMode) return;
 
@@ -399,14 +513,14 @@
 
     historyListEl.innerHTML = throwLog
       .map((entry, index) => {
-        const teamName = teams[entry.teamIndex]?.name ?? `チーム ${entry.teamIndex + 1}`;
+        const formatted = formatHistoryEntry(entry);
         const selected = index === selectedEditIndex ? " history-item--selected" : "";
         return `
           <button type="button" class="history-item${selected}" data-index="${index}">
             <span class="history-item__num">${index + 1}</span>
-            <span class="history-item__team">${teamName}</span>
-            <span class="history-item__input">${formatSelection(entry.selection)}</span>
-            <span class="history-item__score">${entry.scoreAfter ?? "-"}</span>
+            <span class="history-item__team">${formatted.teamName}</span>
+            <span class="history-item__input">${formatted.input}</span>
+            <span class="history-item__score">${formatted.score}</span>
           </button>
         `;
       })
@@ -422,7 +536,7 @@
   }
 
   function renderInputTeamBanner() {
-    if (setEnded || editMode) {
+    if (setEnded || matchEnded || editMode) {
       inputTeamBanner.classList.add("input-team--hidden");
       return;
     }
@@ -439,6 +553,7 @@
       "input-display__value--entered",
       "input-display__value--foul",
       "input-display__value--set-end",
+      "input-display__value--match-end",
       "input-display__value--edit"
     );
 
@@ -447,6 +562,12 @@
 
       if (selectedEditIndex === null) {
         inputDisplay.textContent = "履歴を選択";
+        inputDisplay.classList.add("input-display__value--edit");
+        return;
+      }
+
+      if (isOrderEntry(throwLog[selectedEditIndex])) {
+        inputDisplay.textContent = "順序変更";
         inputDisplay.classList.add("input-display__value--edit");
         return;
       }
@@ -461,13 +582,19 @@
         inputDisplay.textContent = "F";
         inputDisplay.classList.add("input-display__value--foul");
       } else {
-        inputDisplay.textContent = String(pendingEditSelection);
+        inputDisplay.textContent = formatSelection(pendingEditSelection);
         inputDisplay.classList.add("input-display__value--entered");
       }
       return;
     }
 
     inputDisplayLabel.textContent = "現在入力";
+
+    if (matchEnded) {
+      inputDisplay.textContent = "試合終了";
+      inputDisplay.classList.add("input-display__value--match-end");
+      return;
+    }
 
     if (setEnded) {
       inputDisplay.textContent = "セット終了";
@@ -481,6 +608,9 @@
     } else if (pendingSelection === "F") {
       inputDisplay.textContent = "F";
       inputDisplay.classList.add("input-display__value--foul");
+    } else if (pendingSelection === "miss" || pendingSelection === 0) {
+      inputDisplay.textContent = "0";
+      inputDisplay.classList.add("input-display__value--entered");
     } else {
       inputDisplay.textContent = String(pendingSelection);
       inputDisplay.classList.add("input-display__value--entered");
@@ -492,23 +622,27 @@
     editModeBtn.textContent = editMode ? "通常モード" : "修正モード";
     historyPanel.hidden = !editMode;
 
-    const inputBlocked = setEnded || editMode || settingsOpen;
+    const inputBlocked = setEnded || matchEnded || editMode || settingsOpen;
     keypadEl.classList.toggle("keypad--disabled", inputBlocked && !(editMode && selectedEditIndex !== null));
 
-    editModeBtn.disabled = settingsOpen;
+    editModeBtn.disabled = settingsOpen || matchEnded;
 
     if (editMode) {
       nextSetBtn.hidden = true;
       confirmBtn.hidden = false;
-      confirmBtn.disabled = settingsOpen || selectedEditIndex === null || pendingEditSelection === null;
+      const orderEntry = selectedEditIndex !== null && isOrderEntry(throwLog[selectedEditIndex]);
+      confirmBtn.disabled =
+        settingsOpen || selectedEditIndex === null || orderEntry || pendingEditSelection === null;
     } else {
-      confirmBtn.hidden = setEnded;
-      confirmBtn.disabled = settingsOpen || setEnded || pendingSelection === null;
-      nextSetBtn.hidden = !setEnded;
-      nextSetBtn.disabled = settingsOpen;
+      confirmBtn.hidden = setEnded || matchEnded;
+      confirmBtn.disabled = settingsOpen || setEnded || matchEnded;
+      confirmBtn.textContent = "決定";
+      nextSetBtn.hidden = !setEnded || matchEnded;
+      nextSetBtn.disabled = settingsOpen || matchEnded;
     }
 
     backBtn.disabled = history.length === 0 || settingsOpen;
+    renderThrowOrderPanel();
   }
 
   function renderSettingsTeamFields() {
@@ -630,20 +764,86 @@
       teamCount: META.teamCount,
       teams: cloneTeams(),
       activeTeamIndex,
+      setStartTeamIndex,
       setEnded,
       setWinnerIndex,
+      matchEnded,
+      matchWinnerIndex,
       pendingSelection: editMode ? pendingEditSelection : pendingSelection,
+      throwLog: cloneThrowLog(),
       overlaySettings,
+      revision: localRevision,
     };
   }
 
-  function publishSync() {
-    if (window.SMAScoreSync) {
-      SMAScoreSync.publish(buildSyncState());
+  function applySyncState(state) {
+    if (!state?.teams?.length) return;
+
+    const revision = window.SMAScoreSync?.getRevision(state) ?? 0;
+    if (revision <= localRevision) return;
+
+    if (revision > localRevision && pendingSelection !== null) {
+      console.warn("[SMAScore Control] Remote update received; pending input cleared.");
     }
+
+    isApplyingRemote = true;
+    localRevision = revision;
+
+    if (state.tournament !== undefined) META.tournament = state.tournament;
+    if (state.match !== undefined) META.match = state.match;
+    if (state.format !== undefined) META.format = state.format;
+
+    teams.length = 0;
+    state.teams.forEach((team) => teams.push({ ...team }));
+
+    activeTeamIndex = state.activeTeamIndex ?? 0;
+    setStartTeamIndex = state.setStartTeamIndex ?? 0;
+    setEnded = !!state.setEnded;
+    setWinnerIndex = state.setWinnerIndex ?? null;
+    matchEnded = !!state.matchEnded;
+    matchWinnerIndex = state.matchWinnerIndex ?? null;
+
+    if (Array.isArray(state.throwLog)) {
+      throwLog.length = 0;
+      state.throwLog.forEach((entry) => throwLog.push({ ...entry }));
+    } else if (revision > 0) {
+      console.warn("[SMAScore Control] Remote state lacks throwLog; score display only applied.");
+    }
+
+    if (state.overlaySettings) {
+      overlaySettings = { ...overlaySettings, ...state.overlaySettings };
+    }
+
+    pendingSelection = null;
+    pendingEditSelection = null;
+    isApplyingRemote = false;
+
+    renderAll({ skipPublish: true });
   }
 
-  function renderAll() {
+  function publishSync() {
+    if (isApplyingRemote || suppressPublish || !window.SMAScoreSync) return;
+
+    const baseRevision = localRevision;
+    const state = buildSyncState();
+    localRevision = baseRevision + 1;
+
+    SMAScoreSync.publish(state, { baseRevision }).then((result) => {
+      if (result?.committed && result.data) {
+        localRevision = SMAScoreSync.getRevision(result.data);
+        return;
+      }
+
+      if (result?.conflict && result.remote) {
+        applySyncState(result.remote);
+        return;
+      }
+
+      localRevision = baseRevision;
+    });
+  }
+
+  function renderAll(options) {
     renderMetaHeader();
     renderTeamBoard();
     renderSetHeader();
@@ -651,15 +851,18 @@
     renderInputDisplay();
     renderHistoryList();
     renderControls();
-    publishSync();
+
+    if (!options?.skipPublish) {
+      publishSync();
+    }
   }
 
   function selectValue(value) {
-    if (settingsOpen) return;
+    if (settingsOpen || matchEnded) return;
 
     if (editMode) {
-      if (selectedEditIndex === null) return;
-      pendingEditSelection = value;
+      if (selectedEditIndex === null || isOrderEntry(throwLog[selectedEditIndex])) return;
+      pendingEditSelection = value === "miss" ? 0 : value;
       renderInputDisplay();
       renderControls();
       publishSync();
@@ -667,7 +870,7 @@
     }
 
     if (setEnded) return;
-    pendingSelection = value;
+    pendingSelection = value === "miss" ? "miss" : value;
     renderInputDisplay();
     renderControls();
     publishSync();
@@ -675,6 +878,7 @@
 
   function confirmEdit() {
     if (selectedEditIndex === null || pendingEditSelection === null) return;
+    if (isOrderEntry(throwLog[selectedEditIndex])) return;
 
     history.push(snapshot());
 
@@ -694,18 +898,21 @@
       return;
     }
 
-    if (setEnded || pendingSelection === null) return;
+    if (setEnded || matchEnded) return;
+
+    const selection = normalizeSelection(pendingSelection);
 
     history.push(snapshot());
 
     const teamIndex = activeTeamIndex;
     throwLog.push({
+      kind: "throw",
       teamIndex,
-      selection: pendingSelection,
+      selection,
       scoreAfter: 0,
     });
 
-    applySelection(getActiveTeam(), pendingSelection);
+    applySelection(getActiveTeam(), selection);
     throwLog[throwLog.length - 1].scoreAfter = teams[teamIndex].score;
     pendingSelection = null;
 
@@ -714,16 +921,63 @@
   }
 
   function nextSet() {
-    if (!setEnded || setWinnerIndex === null) return;
+    if (!setEnded || setWinnerIndex === null || matchEnded) return;
 
     history.push(snapshot());
 
+    const matchResult = window.SMAScoreMatchRules?.evaluateMatchEnd(
+      teams,
+      setWinnerIndex,
+      META.format
+    ) ?? { ended: false, winnerIndex: null };
+
     teams[setWinnerIndex].setWins += 1;
+
+    if (matchResult.ended) {
+      finishMatch(matchResult.winnerIndex);
+      renderAll();
+      return;
+    }
+
     rotateSetStartTeam();
     beginSet();
     pendingSelection = null;
 
     renderAll();
+  }
+
+  function changeThrowOrder(nextIndex) {
+    if (matchEnded || setEnded || editMode || settingsOpen) return;
+    if (nextIndex < 0 || nextIndex >= teams.length) return;
+    if (teams[nextIndex].disqualified) return;
+    if (nextIndex === activeTeamIndex) return;
+
+    const currentName = getActiveTeam().name;
+    const nextName = teams[nextIndex].name;
+    const ok = window.confirm(
+      `投擲順を変更します。\n現在: ${currentName}\n変更後: ${nextName}\n\nよろしいですか？`
+    );
+    if (!ok) return;
+
+    history.push(snapshot());
+
+    activeTeamIndex = nextIndex;
+    if (teams.length === 2) {
+      setStartTeamIndex = activeTeamIndex;
+    }
+
+    throwLog.push({
+      kind: "order",
+      activeTeamIndex,
+      setStartTeamIndex,
+    });
+
+    pendingSelection = null;
+    renderAll();
+  }
+
+  function swapThrowOrderTwoTeam() {
+    changeThrowOrder(1 - activeTeamIndex);
   }
 
   function back() {
@@ -737,7 +991,7 @@
   }
 
   function toggleEditMode() {
-    if (settingsOpen) return;
+    if (settingsOpen || matchEnded) return;
 
     editMode = !editMode;
     selectedEditIndex = null;
@@ -749,8 +1003,15 @@
   keys.forEach((key) => {
     key.addEventListener("click", () => {
       const raw = key.dataset.value;
-      const value = raw === "F" ? "F" : Number(raw);
-      selectValue(value);
+      if (raw === "F") {
+        selectValue("F");
+        return;
+      }
+      if (raw === "miss") {
+        selectValue("miss");
+        return;
+      }
+      selectValue(Number(raw));
     });
   });
 
@@ -758,6 +1019,7 @@
   backBtn.addEventListener("click", back);
   nextSetBtn.addEventListener("click", nextSet);
   editModeBtn.addEventListener("click", toggleEditMode);
+  swapOrderBtn?.addEventListener("click", swapThrowOrderTwoTeam);
 
   settingsBtn.addEventListener("click", openSettings);
   settingsCloseBtn.addEventListener("click", closeSettings);
@@ -766,5 +1028,35 @@
   settingsForm.addEventListener("submit", saveSettings);
   settingsNewMatchBtn.addEventListener("click", confirmNewMatch);
 
-  renderAll();
+  async function bootstrap() {
+    if (!window.SMAScoreSync) {
+      suppressPublish = false;
+      renderAll();
+      return;
+    }
+
+    SMAScoreSync.subscribe((state) => {
+      if (!state?.teams?.length) return;
+      if (SMAScoreSync.getRevision(state) > localRevision) {
+        applySyncState(state);
+      }
+    });
+
+    const remote = await SMAScoreSync.ready(3000);
+    const remoteRevision = SMAScoreSync.getRevision(remote);
+
+    if (remote?.teams?.length && remoteRevision > 0) {
+      applySyncState(remote);
+    } else {
+      renderAll({ skipPublish: true });
+      const result = await SMAScoreSync.publish(buildSyncState(), { baseRevision: remoteRevision });
+      if (result?.committed && result.data) {
+        localRevision = SMAScoreSync.getRevision(result.data);
+      }
+    }
+
+    suppressPublish = false;
+  }
+
+  bootstrap();
 })();

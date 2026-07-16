@@ -314,6 +314,13 @@ button {
   background: color-mix(in srgb, var(--color-team-4) 14%, transparent);
 }
 
+.team-card--match-winner {
+  box-shadow:
+    0 0 0 2px #ffca28,
+    0 0 20px rgba(255, 202, 40, 0.35);
+  background: color-mix(in srgb, #ffca28 18%, transparent);
+}
+
 .team-card__badge {
   font-size: clamp(8px, 2.1vw, 9px);
   font-weight: 900;
@@ -385,6 +392,65 @@ button {
   flex: 1;
 }
 
+/* ── 投擲順変更 ── */
+
+.throw-order {
+  flex-shrink: 0;
+  padding: 0 clamp(10px, 3vw, 14px) var(--gap-xs);
+}
+
+.throw-order[hidden] {
+  display: none;
+}
+
+.throw-order__swap {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: clamp(11px, 3vw, 12px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.throw-order__swap:disabled {
+  opacity: 0.45;
+}
+
+.throw-order__teams {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.throw-order__teams[hidden] {
+  display: none;
+}
+
+.throw-order__team {
+  min-height: 38px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: clamp(10px, 2.8vw, 11px);
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.throw-order__team--color-0 { border-color: rgba(68, 138, 255, 0.45); }
+.throw-order__team--color-1 { border-color: rgba(255, 82, 82, 0.45); }
+.throw-order__team--color-2 { border-color: rgba(102, 187, 106, 0.45); }
+.throw-order__team--color-3 { border-color: rgba(255, 202, 40, 0.45); }
+
+.throw-order__team:disabled {
+  opacity: 0.35;
+}
+
 /* ── 現在入力 ── */
 
 .input-display {
@@ -440,6 +506,14 @@ button {
   text-shadow: 0 0 14px rgba(255, 202, 40, 0.35);
 }
 
+.input-display__value--match-end {
+  font-size: clamp(20px, 5.5vw, 24px);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: #ffca28;
+  text-shadow: 0 0 16px rgba(255, 202, 40, 0.45);
+}
+
 /* ── テンキー ── */
 
 .keypad {
@@ -464,7 +538,7 @@ button {
 
 .keypad__row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: clamp(5px, 1.2vh, 7px);
   margin-top: clamp(5px, 1.2vh, 7px);
 }
@@ -495,6 +569,19 @@ button {
 
 .key--foul:active {
   background: rgba(255, 82, 82, 0.38);
+}
+
+.key--miss {
+  background: rgba(255, 193, 7, 0.16);
+  border-color: rgba(255, 193, 7, 0.4);
+  color: #ffd54f;
+  font-size: clamp(13px, 3.5vw, 15px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.key--miss:active {
+  background: rgba(255, 193, 7, 0.28);
 }
 
 /* ── 固定フッター ── */

@@ -50,8 +50,11 @@
         },
       ],
       activeTeamIndex: 0,
+      setStartTeamIndex: 0,
       setEnded: false,
       setWinnerIndex: null,
+      matchEnded: false,
+      matchWinnerIndex: null,
       pendingSelection: null,
       overlaySettings: currentOverlaySettings,
     };
@@ -165,7 +168,15 @@
       .join("");
   }
 
-  function renderWaitingContent(state, winnerTeam) {
+  function renderWaitingContent(state, winnerTeam, matchWinnerTeam) {
+    if (state.matchEnded) {
+      const winnerName = matchWinnerTeam ? matchWinnerTeam.name : "—";
+      return `
+        <span class="waiting__winner">${winnerName}</span>
+        <span class="waiting__label">試合終了</span>
+      `;
+    }
+
     if (state.setEnded) {
       const winnerName = winnerTeam ? winnerTeam.name : "—";
       return `
@@ -227,10 +238,13 @@
     `;
   }
 
-  function renderWaitingBlock(state, winnerTeam) {
-    const setEndClass = state.setEnded ? " info__waiting--set-end" : "";
+  function renderWaitingBlock(state, winnerTeam, matchWinnerTeam) {
+    const endClass =
+      state.matchEnded || state.setEnded
+        ? " info__waiting--set-end"
+        : "";
     return `
-      <p class="info__waiting${setEndClass}">${renderWaitingContent(state, winnerTeam)}</p>
+      <p class="info__waiting${endClass}">${renderWaitingContent(state, winnerTeam, matchWinnerTeam)}</p>
     `;
   }
 
@@ -288,27 +302,27 @@
     `;
   }
 
-  function renderOverlayTwo(teams, state, activeIndex, activeTeam, winnerTeam) {
+  function renderOverlayTwo(teams, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam) {
     overlayRoot.className = "overlay overlay--2";
     overlayRoot.innerHTML = `
       ${renderTeamSide(teams[0], 0, "left", activeIndex === 0)}
       <section class="center" aria-label="試合状況">
         ${renderSetScores(teams, "center")}
         ${renderThrowBlock(activeTeam)}
-        ${renderWaitingBlock(state, winnerTeam)}
+        ${renderWaitingBlock(state, winnerTeam, matchWinnerTeam)}
       </section>
       ${renderTeamSide(teams[1], 1, "right", activeIndex === 1)}
     `;
   }
 
-  function renderOverlayMulti(teamCount, teams, state, activeIndex, activeTeam, winnerTeam) {
+  function renderOverlayMulti(teamCount, teams, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam) {
     const layoutClass = teamCount === 3 ? "overlay--3" : "overlay--4";
     overlayRoot.className = `overlay ${layoutClass}`;
     overlayRoot.innerHTML = `
       <header class="overlay__info" aria-label="試合状況">
         ${renderSetScores(teams, "info")}
         ${renderThrowBlock(activeTeam)}
-        ${renderWaitingBlock(state, winnerTeam)}
+        ${renderWaitingBlock(state, winnerTeam, matchWinnerTeam)}
       </header>
       <div class="overlay__teams">
         ${teams.map((team, index) => renderTeamCard(team, index, activeIndex === index)).join("")}
@@ -352,17 +366,24 @@
 
     const teamCount = resolveTeamCount(state);
     const teams = getTeams(state, teamCount);
-    const activeIndex = state.setEnded ? -1 : state.activeTeamIndex;
+    const activeIndex =
+      state.matchEnded || state.setEnded ? -1 : state.activeTeamIndex;
     const activeTeam = activeIndex >= 0 ? teams[activeIndex] : null;
     const winnerTeam =
       state.setEnded && state.setWinnerIndex !== null && state.setWinnerIndex !== undefined
         ? teams[state.setWinnerIndex]
         : null;
+    const matchWinnerTeam =
+      state.matchEnded &&
+      state.matchWinnerIndex !== null &&
+      state.matchWinnerIndex !== undefined
+        ? teams[state.matchWinnerIndex]
+        : null;
 
     if (teamCount === 2) {
-      renderOverlayTwo(teams, state, activeIndex, activeTeam, winnerTeam);
+      renderOverlayTwo(teams, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
     } else {
-      renderOverlayMulti(teamCount, teams, state, activeIndex, activeTeam, winnerTeam);
+      renderOverlayMulti(teamCount, teams, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
     }
 
     applyScoreAnimations(teams, settings);
